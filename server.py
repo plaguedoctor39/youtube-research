@@ -1,5 +1,6 @@
 import os
 import re
+import threading
 
 from fastmcp import FastMCP
 from googleapiclient.discovery import build
@@ -24,17 +25,18 @@ _YOUTUBE_URL_RE = re.compile(
 _VIDEO_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{11}$")
 
 _yt_client = None
+_yt_client_lock = threading.Lock()
 
 
 def extract_video_id(url_or_id: str) -> str:
     """Extract video ID from a YouTube URL or return as-is if already an ID."""
-    url_or_id = url_or_id.strip()
+    url_or_id = url_or_id.strip()[:500]
     m = _YOUTUBE_URL_RE.search(url_or_id)
     if m:
         return m.group(1)
     if _VIDEO_ID_RE.match(url_or_id):
         return url_or_id
-    raise ValueError(f"Could not extract video ID from: {url_or_id}")
+    raise ValueError(f"Could not extract video ID from: {url_or_id[:100]}")
 
 
 def parse_duration(iso: str) -> str:
@@ -48,19 +50,34 @@ def parse_duration(iso: str) -> str:
     return f"{mi}:{s:02d}"
 
 
+def _safe_int(val, default: int = 0) -> int:
+    """Safely convert a value to int, returning default on failure."""
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_api_error(e: HttpError) -> str:
+    """Format HttpError without leaking the API key from the request URI."""
+    return f"YouTube API error {e.resp.status}: {e._get_reason()}"
+
+
 def get_youtube_client():
-    """Lazy singleton for the YouTube API client."""
+    """Thread-safe lazy singleton for the YouTube API client."""
     global _yt_client
     if _yt_client is None:
-        api_key = os.environ.get("YOUTUBE_API_KEY")
-        if not api_key:
-            raise RuntimeError(
-                "YOUTUBE_API_KEY environment variable is not set. "
-                "Get a key from Google Cloud Console: "
-                "APIs & Services -> Credentials -> Create API Key, "
-                "then enable YouTube Data API v3."
-            )
-        _yt_client = build("youtube", "v3", developerKey=api_key)
+        with _yt_client_lock:
+            if _yt_client is None:
+                api_key = os.environ.get("YOUTUBE_API_KEY")
+                if not api_key:
+                    raise RuntimeError(
+                        "YOUTUBE_API_KEY environment variable is not set. "
+                        "Get a key from Google Cloud Console: "
+                        "APIs & Services -> Credentials -> Create API Key, "
+                        "then enable YouTube Data API v3."
+                    )
+                _yt_client = build("youtube", "v3", developerKey=api_key)
     return _yt_client
 
 
@@ -71,7 +88,7 @@ def _format_video(snippet: dict, details: dict, stats: dict, video_id: str) -> d
         "title": snippet.get("title", ""),
         "description": snippet.get("description", ""),
         "duration": parse_duration(details.get("duration", "")),
-        "view_count": int(stats.get("viewCount", 0)),
+        "view_count": _safe_int(stats.get("viewCount")),
         "published_at": snippet.get("publishedAt", ""),
         "channel": snippet.get("channelTitle", ""),
     }
@@ -87,12 +104,20 @@ def youtube_search(query: str, max_results: int = 10) -> list[dict] | str:
     Returns a list of videos with metadata: id, title, description,
     duration, view_count, published_at, channel.
     """
+    if len(query) > 500:
+        return "Query too long (max 500 characters)."
     try:
         yt = get_youtube_client()
 
         search_resp = (
             yt.search()
-            .list(part="snippet", type="video", q=query, maxResults=max_results, order="relevance")
+            .list(
+                part="snippet",
+                type="video",
+                q=query,
+                maxResults=min(max(1, max_results), 50),
+                order="relevance",
+            )
             .execute()
         )
 
@@ -120,8 +145,8 @@ def youtube_search(query: str, max_results: int = 10) -> list[dict] | str:
 
     except HttpError as e:
         if e.resp.status == 403:
-            return f"YouTube API quota error: {e}"
-        return f"YouTube API error: {e}"
+            return f"YouTube API quota error: {_safe_api_error(e)}"
+        return _safe_api_error(e)
     except RuntimeError as e:
         return str(e)
 
@@ -158,18 +183,20 @@ def youtube_video_info(video_url_or_id: str) -> dict | str:
     except ValueError as e:
         return str(e)
     except HttpError as e:
-        return f"YouTube API error: {e}"
+        return _safe_api_error(e)
     except RuntimeError as e:
         return str(e)
 
 
 @mcp.tool
-def youtube_transcript(video_url_or_id: str, lang: list[str] = ["ru", "en"]) -> str:
+def youtube_transcript(video_url_or_id: str, lang: list[str] | None = None) -> str:
     """Get subtitles/transcript for a YouTube video.
 
     Accepts a video URL or ID. Returns timestamped text.
     Looks for Russian subtitles first, then English by default.
     """
+    if lang is None:
+        lang = ["ru", "en"]
     try:
         video_id = extract_video_id(video_url_or_id)
     except ValueError as e:
@@ -223,7 +250,7 @@ def youtube_channel_info(channel_url_or_id: str) -> dict | str:
     """
     try:
         yt = get_youtube_client()
-        channel_id = channel_url_or_id.strip()
+        channel_id = channel_url_or_id.strip()[:500]
 
         # Handle @handle format
         if channel_id.startswith("@"):
@@ -238,7 +265,7 @@ def youtube_channel_info(channel_url_or_id: str) -> dict | str:
                 else:
                     resp = yt.channels().list(part="snippet,statistics", forHandle=f"@{val}").execute()
             else:
-                return f"Could not parse channel URL: {channel_id}"
+                return f"Could not parse channel URL: {channel_id[:100]}"
         # Assume channel ID (starts with UC)
         elif channel_id.startswith("UC"):
             resp = yt.channels().list(part="snippet,statistics", id=channel_id).execute()
@@ -249,7 +276,7 @@ def youtube_channel_info(channel_url_or_id: str) -> dict | str:
 
         items = resp.get("items", [])
         if not items:
-            return f"Channel not found: {channel_url_or_id}"
+            return f"Channel not found: {channel_url_or_id[:100]}"
 
         ch = items[0]
         snippet = ch["snippet"]
@@ -259,15 +286,15 @@ def youtube_channel_info(channel_url_or_id: str) -> dict | str:
             "title": snippet.get("title", ""),
             "description": snippet.get("description", ""),
             "custom_url": snippet.get("customUrl", ""),
-            "subscriber_count": int(stats.get("subscriberCount", 0)),
-            "view_count": int(stats.get("viewCount", 0)),
-            "video_count": int(stats.get("videoCount", 0)),
+            "subscriber_count": _safe_int(stats.get("subscriberCount")),
+            "view_count": _safe_int(stats.get("viewCount")),
+            "video_count": _safe_int(stats.get("videoCount")),
             "published_at": snippet.get("publishedAt", ""),
             "thumbnail": snippet.get("thumbnails", {}).get("high", {}).get("url", ""),
         }
 
     except HttpError as e:
-        return f"YouTube API error: {e}"
+        return _safe_api_error(e)
     except RuntimeError as e:
         return str(e)
 
@@ -291,7 +318,7 @@ def youtube_channel_videos(channel_url_or_id: str, max_results: int = 20) -> lis
 
         playlist_resp = (
             yt.playlistItems()
-            .list(part="snippet", playlistId=uploads_id, maxResults=min(max_results, 50))
+            .list(part="snippet", playlistId=uploads_id, maxResults=min(max(1, max_results), 50))
             .execute()
         )
 
@@ -321,7 +348,7 @@ def youtube_channel_videos(channel_url_or_id: str, max_results: int = 20) -> lis
         return results
 
     except HttpError as e:
-        return f"YouTube API error: {e}"
+        return _safe_api_error(e)
     except RuntimeError as e:
         return str(e)
 
@@ -333,7 +360,7 @@ def youtube_playlist(playlist_url_or_id: str, max_results: int = 50) -> list[dic
     Accepts a playlist URL or ID. Returns videos with metadata.
     """
     try:
-        playlist_id = playlist_url_or_id.strip()
+        playlist_id = playlist_url_or_id.strip()[:500]
         m = re.search(r"[?&]list=([a-zA-Z0-9_-]+)", playlist_id)
         if m:
             playlist_id = m.group(1)
@@ -341,7 +368,7 @@ def youtube_playlist(playlist_url_or_id: str, max_results: int = 50) -> list[dic
         yt = get_youtube_client()
         playlist_resp = (
             yt.playlistItems()
-            .list(part="snippet", playlistId=playlist_id, maxResults=min(max_results, 50))
+            .list(part="snippet", playlistId=playlist_id, maxResults=min(max(1, max_results), 50))
             .execute()
         )
 
@@ -371,7 +398,7 @@ def youtube_playlist(playlist_url_or_id: str, max_results: int = 50) -> list[dic
         return results
 
     except HttpError as e:
-        return f"YouTube API error: {e}"
+        return _safe_api_error(e)
     except RuntimeError as e:
         return str(e)
 
@@ -391,7 +418,7 @@ def youtube_comments(video_url_or_id: str, max_results: int = 20) -> list[dict] 
             .list(
                 part="snippet",
                 videoId=video_id,
-                maxResults=min(max_results, 100),
+                maxResults=min(max(1, max_results), 100),
                 order="relevance",
                 textFormat="plainText",
             )
@@ -412,8 +439,8 @@ def youtube_comments(video_url_or_id: str, max_results: int = 20) -> list[dict] 
 
     except HttpError as e:
         if e.resp.status == 403:
-            return f"Comments are disabled for this video ({video_id})."
-        return f"YouTube API error: {e}"
+            return "Comments are disabled or inaccessible for this video."
+        return _safe_api_error(e)
     except ValueError as e:
         return str(e)
     except RuntimeError as e:
@@ -427,6 +454,8 @@ def youtube_trending(region_code: str = "US", max_results: int = 10) -> list[dic
     region_code: ISO 3166-1 alpha-2 country code (e.g. US, RU, GB, DE, JP).
     Returns videos with metadata sorted by popularity.
     """
+    if len(region_code) != 2 or not region_code.isalpha():
+        return f"Invalid region_code: {region_code!r}. Use ISO 3166-1 alpha-2 (e.g. US, RU, GB)."
     try:
         yt = get_youtube_client()
 
@@ -435,8 +464,8 @@ def youtube_trending(region_code: str = "US", max_results: int = 10) -> list[dic
             .list(
                 part="snippet,contentDetails,statistics",
                 chart="mostPopular",
-                regionCode=region_code,
-                maxResults=min(max_results, 50),
+                regionCode=region_code.upper(),
+                maxResults=min(max(1, max_results), 50),
             )
             .execute()
         )
@@ -454,7 +483,7 @@ def youtube_trending(region_code: str = "US", max_results: int = 10) -> list[dic
         return results
 
     except HttpError as e:
-        return f"YouTube API error: {e}"
+        return _safe_api_error(e)
     except RuntimeError as e:
         return str(e)
 
@@ -464,7 +493,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="YouTube Research MCP Server")
     parser.add_argument("--sse", action="store_true", help="Run as SSE server (for remote/web access)")
-    parser.add_argument("--host", default="0.0.0.0", help="SSE server host (default: 0.0.0.0)")
+    parser.add_argument("--host", default="127.0.0.1", help="SSE server host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8000, help="SSE server port (default: 8000)")
     args = parser.parse_args()
 

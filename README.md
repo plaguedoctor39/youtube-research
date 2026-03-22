@@ -59,15 +59,17 @@ Restart Claude Code — all 8 tools will become available.
 To use with Claude.ai web chat or other remote MCP clients, run the server in SSE mode on a VPS:
 
 ```bash
-YOUTUBE_API_KEY=your_key uv run server.py --sse --port 8000
+YOUTUBE_API_KEY=your_key uv run server.py --sse --host 0.0.0.0 --port 8000
 ```
 
 Options:
 - `--sse` — enable SSE transport (default is stdio)
-- `--host` — bind address (default: `0.0.0.0`)
+- `--host` — bind address (default: `127.0.0.1` — use `0.0.0.0` to expose externally)
 - `--port` — port number (default: `8000`)
 
 The server will be available at `http://your-vps:8000/sse`.
+
+> **Security:** The SSE endpoint has no built-in authentication. For public deployment, use a reverse proxy (nginx) with token-based auth in front of it.
 
 ## Usage Examples
 
