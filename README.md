@@ -1,37 +1,37 @@
 # YouTube Research MCP Server
 
-MCP сервер для работы с YouTube из Claude Code — поиск видео, получение метаданных и субтитров.
+An MCP server for YouTube integration with Claude Code — search videos, get metadata, and fetch transcripts.
 
-## Инструменты
+## Tools
 
-| Инструмент | Описание |
+| Tool | Description |
 |---|---|
-| `youtube_search(query, max_results)` | Поиск видео по запросу |
-| `youtube_video_info(video_url_or_id)` | Метаданные видео по ссылке/ID |
-| `youtube_transcript(video_url_or_id, lang)` | Субтитры видео с таймкодами |
+| `youtube_search(query, max_results)` | Search videos by query |
+| `youtube_video_info(video_url_or_id)` | Get video metadata by URL or ID |
+| `youtube_transcript(video_url_or_id, lang)` | Fetch video subtitles with timestamps |
 
-## Установка
+## Setup
 
-### 1. Получение YouTube API ключа
+### 1. Get a YouTube API Key
 
-1. Перейдите в [Google Cloud Console](https://console.cloud.google.com/)
-2. Создайте проект (или выберите существующий)
-3. Перейдите в **APIs & Services → Library**
-4. Найдите и включите **YouTube Data API v3**
-5. Перейдите в **APIs & Services → Credentials**
-6. Нажмите **Create Credentials → API Key**
-7. Скопируйте ключ
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a project (or select an existing one)
+3. Navigate to **APIs & Services → Library**
+4. Find and enable **YouTube Data API v3**
+5. Go to **APIs & Services → Credentials**
+6. Click **Create Credentials → API Key**
+7. Copy the key
 
-### 2. Установка зависимостей
+### 2. Install Dependencies
 
 ```bash
 cd /path/to/youtube_research
 uv sync
 ```
 
-### 3. Конфигурация Claude Code
+### 3. Configure Claude Code
 
-Создайте файл `~/.claude/.mcp.json` (глобально для всех проектов):
+Create `~/.claude/.mcp.json` (global — available in all projects):
 
 ```json
 {
@@ -40,27 +40,27 @@ uv sync
       "command": "uv",
       "args": ["run", "--directory", "/path/to/youtube_research", "server.py"],
       "env": {
-        "YOUTUBE_API_KEY": "ваш_ключ"
+        "YOUTUBE_API_KEY": "your_key"
       }
     }
   }
 }
 ```
 
-Замените `/path/to/youtube_research` на фактический путь к проекту.
+Replace `/path/to/youtube_research` with the actual path to the project.
 
-> **Важно:** `.mcp.json` содержит API-ключ — не коммитьте его в git.
+> **Important:** `.mcp.json` contains your API key — do not commit it to git.
 
-Альтернативно, можно положить `.mcp.json` в корень проекта — тогда сервер будет доступен только при работе из этой директории.
+Alternatively, place `.mcp.json` in the project root — the server will only be available when working from that directory.
 
-### 4. Перезапуск
+### 4. Restart
 
-Перезапустите Claude Code — инструменты `youtube_search`, `youtube_video_info` и `youtube_transcript` станут доступны.
+Restart Claude Code — `youtube_search`, `youtube_video_info`, and `youtube_transcript` tools will become available.
 
-## Примеры использования
+## Usage Examples
 
-В Claude Code:
+In Claude Code:
 
-- «Найди видео про Python asyncio» → вызовет `youtube_search`
-- «Покажи информацию о видео https://youtu.be/dQw4w9WgXcQ» → вызовет `youtube_video_info`
-- «Получи субтитры этого видео: https://youtube.com/watch?v=...» → вызовет `youtube_transcript`
+- "Find videos about Python asyncio" → calls `youtube_search`
+- "Show info for https://youtu.be/dQw4w9WgXcQ" → calls `youtube_video_info`
+- "Get subtitles for this video: https://youtube.com/watch?v=..." → calls `youtube_transcript`

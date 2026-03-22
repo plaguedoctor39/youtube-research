@@ -27,18 +27,18 @@ _yt_client = None
 
 
 def extract_video_id(url_or_id: str) -> str:
-    """Извлекает video ID из URL или возвращает как есть, если это уже ID."""
+    """Extract video ID from a YouTube URL or return as-is if already an ID."""
     url_or_id = url_or_id.strip()
     m = _YOUTUBE_URL_RE.search(url_or_id)
     if m:
         return m.group(1)
     if _VIDEO_ID_RE.match(url_or_id):
         return url_or_id
-    raise ValueError(f"Не удалось извлечь video ID из: {url_or_id}")
+    raise ValueError(f"Could not extract video ID from: {url_or_id}")
 
 
 def parse_duration(iso: str) -> str:
-    """Конвертирует ISO 8601 duration (PT1H2M3S) в читаемый формат."""
+    """Convert ISO 8601 duration (PT1H2M3S) to a human-readable format."""
     m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", iso)
     if not m:
         return iso
@@ -49,23 +49,23 @@ def parse_duration(iso: str) -> str:
 
 
 def get_youtube_client():
-    """Ленивый синглтон YouTube API клиента."""
+    """Lazy singleton for the YouTube API client."""
     global _yt_client
     if _yt_client is None:
         api_key = os.environ.get("YOUTUBE_API_KEY")
         if not api_key:
             raise RuntimeError(
-                "Переменная окружения YOUTUBE_API_KEY не установлена. "
-                "Получите ключ в Google Cloud Console: "
-                "APIs & Services → Credentials → Create API Key, "
-                "затем включите YouTube Data API v3."
+                "YOUTUBE_API_KEY environment variable is not set. "
+                "Get a key from Google Cloud Console: "
+                "APIs & Services -> Credentials -> Create API Key, "
+                "then enable YouTube Data API v3."
             )
         _yt_client = build("youtube", "v3", developerKey=api_key)
     return _yt_client
 
 
 def _format_video(snippet: dict, details: dict, stats: dict, video_id: str) -> dict:
-    """Формирует унифицированный словарь метаданных видео."""
+    """Build a unified video metadata dict."""
     return {
         "id": video_id,
         "title": snippet.get("title", ""),
@@ -82,9 +82,9 @@ def _format_video(snippet: dict, details: dict, stats: dict, video_id: str) -> d
 
 @mcp.tool
 def youtube_search(query: str, max_results: int = 10) -> list[dict] | str:
-    """Поиск видео на YouTube по запросу.
+    """Search YouTube videos by query.
 
-    Возвращает список видео с метаданными: id, title, description,
+    Returns a list of videos with metadata: id, title, description,
     duration, view_count, published_at, channel.
     """
     try:
@@ -120,18 +120,18 @@ def youtube_search(query: str, max_results: int = 10) -> list[dict] | str:
 
     except HttpError as e:
         if e.resp.status == 403:
-            return f"Ошибка квоты YouTube API: {e}"
-        return f"Ошибка YouTube API: {e}"
+            return f"YouTube API quota error: {e}"
+        return f"YouTube API error: {e}"
     except RuntimeError as e:
         return str(e)
 
 
 @mcp.tool
 def youtube_video_info(video_url_or_id: str) -> dict | str:
-    """Получить метаданные видео по ссылке или ID.
+    """Get video metadata by URL or ID.
 
-    Возвращает: id, title, description, duration, view_count, published_at, channel.
-    Не требует поиска — прямой запрос по ID видео.
+    Returns: id, title, description, duration, view_count, published_at, channel.
+    Direct lookup by video ID — no search required.
     """
     try:
         video_id = extract_video_id(video_url_or_id)
@@ -145,7 +145,7 @@ def youtube_video_info(video_url_or_id: str) -> dict | str:
 
         items = resp.get("items", [])
         if not items:
-            return f"Видео не найдено: {video_id}"
+            return f"Video not found: {video_id}"
 
         item = items[0]
         return _format_video(
@@ -158,17 +158,17 @@ def youtube_video_info(video_url_or_id: str) -> dict | str:
     except ValueError as e:
         return str(e)
     except HttpError as e:
-        return f"Ошибка YouTube API: {e}"
+        return f"YouTube API error: {e}"
     except RuntimeError as e:
         return str(e)
 
 
 @mcp.tool
 def youtube_transcript(video_url_or_id: str, lang: list[str] = ["ru", "en"]) -> str:
-    """Получить субтитры/транскрипт видео YouTube.
+    """Get subtitles/transcript for a YouTube video.
 
-    Принимает ссылку на видео или ID. Возвращает текст с таймкодами.
-    По умолчанию ищет русские, затем английские субтитры.
+    Accepts a video URL or ID. Returns timestamped text.
+    Looks for Russian subtitles first, then English by default.
     """
     try:
         video_id = extract_video_id(video_url_or_id)
@@ -179,15 +179,13 @@ def youtube_transcript(video_url_or_id: str, lang: list[str] = ["ru", "en"]) -> 
         ytt_api = YouTubeTranscriptApi()
         transcript = ytt_api.fetch(video_id, languages=lang)
 
-        # Заголовок с метаданными
         header = (
             f"Video ID: {transcript.video_id}\n"
-            f"Язык: {transcript.language} ({transcript.language_code})\n"
-            f"Автогенерация: {'да' if transcript.is_generated else 'нет'}\n"
+            f"Language: {transcript.language} ({transcript.language_code})\n"
+            f"Auto-generated: {'yes' if transcript.is_generated else 'no'}\n"
             f"---\n"
         )
 
-        # Форматирование таймкодов
         lines = []
         for snippet in transcript:
             total_sec = int(snippet.start)
@@ -202,18 +200,18 @@ def youtube_transcript(video_url_or_id: str, lang: list[str] = ["ru", "en"]) -> 
         return header + "\n".join(lines)
 
     except TranscriptsDisabled:
-        return f"Субтитры отключены для этого видео ({video_id})."
+        return f"Subtitles are disabled for this video ({video_id})."
     except NoTranscriptFound:
         return (
-            f"Субтитры не найдены для языков {lang} (видео: {video_id}). "
-            f"Попробуйте другой язык."
+            f"No transcript found for languages {lang} (video: {video_id}). "
+            f"Try a different language."
         )
     except VideoUnavailable:
-        return f"Видео недоступно: {video_id}"
+        return f"Video unavailable: {video_id}"
     except InvalidVideoId:
-        return f"Некорректный ID видео: {video_url_or_id}"
+        return f"Invalid video ID: {video_url_or_id}"
     except CouldNotRetrieveTranscript as e:
-        return f"Не удалось получить субтитры: {e}"
+        return f"Could not retrieve transcript: {e}"
 
 
 if __name__ == "__main__":
