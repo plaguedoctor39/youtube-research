@@ -57,6 +57,21 @@ Alternatively, place `.mcp.json` in the project root — the server will only be
 
 Restart Claude Code — `youtube_search`, `youtube_video_info`, and `youtube_transcript` tools will become available.
 
+## Remote Access (SSE)
+
+To use with Claude.ai web chat or other remote MCP clients, run the server in SSE mode on a VPS:
+
+```bash
+YOUTUBE_API_KEY=your_key uv run server.py --sse --port 8000
+```
+
+Options:
+- `--sse` — enable SSE transport (default is stdio)
+- `--host` — bind address (default: `0.0.0.0`)
+- `--port` — port number (default: `8000`)
+
+The server will be available at `http://your-vps:8000/sse`.
+
 ## Usage Examples
 
 In Claude Code:

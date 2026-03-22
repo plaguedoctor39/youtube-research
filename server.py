@@ -215,4 +215,15 @@ def youtube_transcript(video_url_or_id: str, lang: list[str] = ["ru", "en"]) -> 
 
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio", show_banner=False)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="YouTube Research MCP Server")
+    parser.add_argument("--sse", action="store_true", help="Run as SSE server (for remote/web access)")
+    parser.add_argument("--host", default="0.0.0.0", help="SSE server host (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=8000, help="SSE server port (default: 8000)")
+    args = parser.parse_args()
+
+    if args.sse:
+        mcp.run(transport="sse", host=args.host, port=args.port)
+    else:
+        mcp.run(transport="stdio", show_banner=False)
