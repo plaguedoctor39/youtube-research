@@ -214,6 +214,251 @@ def youtube_transcript(video_url_or_id: str, lang: list[str] = ["ru", "en"]) -> 
         return f"Could not retrieve transcript: {e}"
 
 
+@mcp.tool
+def youtube_channel_info(channel_url_or_id: str) -> dict | str:
+    """Get channel metadata by URL, handle, or ID.
+
+    Returns: id, title, description, subscriber_count, view_count,
+    video_count, published_at, thumbnail, custom_url.
+    """
+    try:
+        yt = get_youtube_client()
+        channel_id = channel_url_or_id.strip()
+
+        # Handle @handle format
+        if channel_id.startswith("@"):
+            resp = yt.channels().list(part="snippet,statistics", forHandle=channel_id).execute()
+        # Handle full URLs
+        elif "youtube.com" in channel_id:
+            m = re.search(r"youtube\.com/(?:channel/|@)([^/?&]+)", channel_id)
+            if m:
+                val = m.group(1)
+                if val.startswith("UC"):
+                    resp = yt.channels().list(part="snippet,statistics", id=val).execute()
+                else:
+                    resp = yt.channels().list(part="snippet,statistics", forHandle=f"@{val}").execute()
+            else:
+                return f"Could not parse channel URL: {channel_id}"
+        # Assume channel ID (starts with UC)
+        elif channel_id.startswith("UC"):
+            resp = yt.channels().list(part="snippet,statistics", id=channel_id).execute()
+        else:
+            # Try as handle
+            handle = channel_id if channel_id.startswith("@") else f"@{channel_id}"
+            resp = yt.channels().list(part="snippet,statistics", forHandle=handle).execute()
+
+        items = resp.get("items", [])
+        if not items:
+            return f"Channel not found: {channel_url_or_id}"
+
+        ch = items[0]
+        snippet = ch["snippet"]
+        stats = ch.get("statistics", {})
+        return {
+            "id": ch["id"],
+            "title": snippet.get("title", ""),
+            "description": snippet.get("description", ""),
+            "custom_url": snippet.get("customUrl", ""),
+            "subscriber_count": int(stats.get("subscriberCount", 0)),
+            "view_count": int(stats.get("viewCount", 0)),
+            "video_count": int(stats.get("videoCount", 0)),
+            "published_at": snippet.get("publishedAt", ""),
+            "thumbnail": snippet.get("thumbnails", {}).get("high", {}).get("url", ""),
+        }
+
+    except HttpError as e:
+        return f"YouTube API error: {e}"
+    except RuntimeError as e:
+        return str(e)
+
+
+@mcp.tool
+def youtube_channel_videos(channel_url_or_id: str, max_results: int = 20) -> list[dict] | str:
+    """List recent videos from a channel.
+
+    Accepts channel URL, @handle, or ID. Returns videos sorted by date (newest first)
+    with metadata: id, title, description, duration, view_count, published_at.
+    """
+    try:
+        # First get channel info to find uploads playlist
+        info = youtube_channel_info(channel_url_or_id)
+        if isinstance(info, str):
+            return info
+
+        yt = get_youtube_client()
+        # Uploads playlist ID = replace "UC" with "UU" in channel ID
+        uploads_id = "UU" + info["id"][2:]
+
+        playlist_resp = (
+            yt.playlistItems()
+            .list(part="snippet", playlistId=uploads_id, maxResults=min(max_results, 50))
+            .execute()
+        )
+
+        video_ids = [
+            item["snippet"]["resourceId"]["videoId"]
+            for item in playlist_resp.get("items", [])
+        ]
+        if not video_ids:
+            return []
+
+        videos_resp = (
+            yt.videos()
+            .list(part="snippet,contentDetails,statistics", id=",".join(video_ids))
+            .execute()
+        )
+
+        results = []
+        for item in videos_resp.get("items", []):
+            results.append(
+                _format_video(
+                    item["snippet"],
+                    item["contentDetails"],
+                    item.get("statistics", {}),
+                    item["id"],
+                )
+            )
+        return results
+
+    except HttpError as e:
+        return f"YouTube API error: {e}"
+    except RuntimeError as e:
+        return str(e)
+
+
+@mcp.tool
+def youtube_playlist(playlist_url_or_id: str, max_results: int = 50) -> list[dict] | str:
+    """List videos in a YouTube playlist.
+
+    Accepts a playlist URL or ID. Returns videos with metadata.
+    """
+    try:
+        playlist_id = playlist_url_or_id.strip()
+        m = re.search(r"[?&]list=([a-zA-Z0-9_-]+)", playlist_id)
+        if m:
+            playlist_id = m.group(1)
+
+        yt = get_youtube_client()
+        playlist_resp = (
+            yt.playlistItems()
+            .list(part="snippet", playlistId=playlist_id, maxResults=min(max_results, 50))
+            .execute()
+        )
+
+        video_ids = [
+            item["snippet"]["resourceId"]["videoId"]
+            for item in playlist_resp.get("items", [])
+        ]
+        if not video_ids:
+            return []
+
+        videos_resp = (
+            yt.videos()
+            .list(part="snippet,contentDetails,statistics", id=",".join(video_ids))
+            .execute()
+        )
+
+        results = []
+        for item in videos_resp.get("items", []):
+            results.append(
+                _format_video(
+                    item["snippet"],
+                    item["contentDetails"],
+                    item.get("statistics", {}),
+                    item["id"],
+                )
+            )
+        return results
+
+    except HttpError as e:
+        return f"YouTube API error: {e}"
+    except RuntimeError as e:
+        return str(e)
+
+
+@mcp.tool
+def youtube_comments(video_url_or_id: str, max_results: int = 20) -> list[dict] | str:
+    """Get top-level comments for a YouTube video.
+
+    Returns comments sorted by relevance with: author, text, likes, published_at.
+    """
+    try:
+        video_id = extract_video_id(video_url_or_id)
+        yt = get_youtube_client()
+
+        resp = (
+            yt.commentThreads()
+            .list(
+                part="snippet",
+                videoId=video_id,
+                maxResults=min(max_results, 100),
+                order="relevance",
+                textFormat="plainText",
+            )
+            .execute()
+        )
+
+        results = []
+        for item in resp.get("items", []):
+            comment = item["snippet"]["topLevelComment"]["snippet"]
+            results.append({
+                "author": comment.get("authorDisplayName", ""),
+                "text": comment.get("textDisplay", ""),
+                "likes": comment.get("likeCount", 0),
+                "published_at": comment.get("publishedAt", ""),
+                "reply_count": item["snippet"].get("totalReplyCount", 0),
+            })
+        return results
+
+    except HttpError as e:
+        if e.resp.status == 403:
+            return f"Comments are disabled for this video ({video_id})."
+        return f"YouTube API error: {e}"
+    except ValueError as e:
+        return str(e)
+    except RuntimeError as e:
+        return str(e)
+
+
+@mcp.tool
+def youtube_trending(region_code: str = "US", max_results: int = 10) -> list[dict] | str:
+    """Get trending/most popular videos for a region.
+
+    region_code: ISO 3166-1 alpha-2 country code (e.g. US, RU, GB, DE, JP).
+    Returns videos with metadata sorted by popularity.
+    """
+    try:
+        yt = get_youtube_client()
+
+        resp = (
+            yt.videos()
+            .list(
+                part="snippet,contentDetails,statistics",
+                chart="mostPopular",
+                regionCode=region_code,
+                maxResults=min(max_results, 50),
+            )
+            .execute()
+        )
+
+        results = []
+        for item in resp.get("items", []):
+            results.append(
+                _format_video(
+                    item["snippet"],
+                    item["contentDetails"],
+                    item.get("statistics", {}),
+                    item["id"],
+                )
+            )
+        return results
+
+    except HttpError as e:
+        return f"YouTube API error: {e}"
+    except RuntimeError as e:
+        return str(e)
+
+
 if __name__ == "__main__":
     import argparse
 
